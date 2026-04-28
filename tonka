@@ -118,6 +118,7 @@ ensure_ssh_key() {
 
 update_ssh_config() {
     local ip="$1"
+    [[ -n "$ip" ]] || die "update_ssh_config called without an IP"
     local ssh_config="$HOME/.ssh/config"
     local host_block="Host tonka
     HostName $ip
@@ -152,37 +153,33 @@ update_ssh_config() {
         return
     fi
 
-    # Host exists, update IP if changed
+    # Host exists, ensure HostName is present and matches the current IP
     local current_ip
-    current_ip=$(grep -A1 "^Host tonka$" "$ssh_config" | grep HostName | awk '{print $2}')
-    if [[ "$current_ip" != "$ip" ]]; then
-        # Update the HostName for tonka host
-        sed -i '' '/^Host tonka$/,/^Host /{s/^[[:space:]]*HostName .*/    HostName '"$ip"'/;}' "$ssh_config"
-        log_info "Updated tonka IP in ~/.ssh/config"
+    current_ip=$(awk '
+        /^Host tonka$/ { in_block=1; next }
+        /^Host / { in_block=0 }
+        in_block && $1=="HostName" { print $2; exit }
+    ' "$ssh_config")
+    if [[ "$current_ip" == "$ip" ]]; then
+        return
     fi
+    if [[ -z "$current_ip" ]]; then
+        # HostName missing from the block — insert one after `Host tonka`
+        sed -i '' '/^Host tonka$/a\
+    HostName '"$ip"'
+' "$ssh_config"
+    else
+        sed -i '' '/^Host tonka$/,/^Host /{s/^[[:space:]]*HostName .*/    HostName '"$ip"'/;}' "$ssh_config"
+    fi
+    log_info "Updated tonka IP in ~/.ssh/config"
 }
 
 get_vm_ip() {
     local vm_name="$1"
-    tart ip "$vm_name" --resolver arp 2>/dev/null || echo ""
-}
-
-wait_for_vm_ip() {
-    local vm_name="$1"
-    local max_attempts=60
-    local attempt=0
-    local ip=""
-
-    while [[ -z "$ip" && $attempt -lt $max_attempts ]]; do
-        ip=$(get_vm_ip "$vm_name")
-        if [[ -z "$ip" ]]; then
-            sleep 1
-            ((attempt++))
-        fi
-    done
-
+    local ip
+    ip=$(tart ip "$vm_name" --wait 30 2>/dev/null) || true
     if [[ -z "$ip" ]]; then
-        die "Failed to get IP for VM $vm_name after $max_attempts seconds"
+        die "Could not resolve IP for VM '$vm_name' after 30s"
     fi
     echo "$ip"
 }
@@ -240,7 +237,7 @@ ensure_vm() {
         disown $! 2>/dev/null || true
         sleep 15
         local ip
-        ip=$(wait_for_vm_ip "$VM_NAME")
+        ip=$(get_vm_ip "$VM_NAME")
         wait_for_ssh "$ip"
         update_ssh_config "$ip"
         log_info "VM ready at $ip"
