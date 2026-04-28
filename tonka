@@ -469,9 +469,18 @@ ssh_to_https() {
 }
 
 cmd_new_repo() {
-    local repo_path="${1:-}"
+    local token="${GITHUB_TOKEN:-}"
+    local repo_path=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --token) token="${2:-}"; shift 2 ;;
+            --token=*) token="${1#*=}"; shift ;;
+            -*) die "Unknown option: $1" ;;
+            *) repo_path="$1"; shift ;;
+        esac
+    done
     if [[ -z "$repo_path" ]]; then
-        die "Usage: tonka new-repo <repo-path>"
+        die "Usage: tonka new-repo [--token <pat>] <repo-path>"
     fi
     repo_path="$(cd "$repo_path" && pwd)"
     if [[ ! -d "$repo_path/.git" ]]; then
@@ -491,9 +500,14 @@ cmd_new_repo() {
     local ip
     ip=$(get_vm_ip "$VM_NAME")
 
+    local clone_url="$git_remote"
+    if [[ -n "$token" && "$git_remote" == https://github.com/* ]]; then
+        clone_url="${git_remote/https:\/\//https://x-access-token:$token@}"
+    fi
+
     log_info "Cloning $repo_name into VM..."
     ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" "$TART_USER@$ip" \
-        "mkdir -p ~/repos && git clone '$git_remote' ~/repos/$repo_name"
+        "mkdir -p ~/repos && git clone '$clone_url' ~/repos/$repo_name"
     log_info "Repo '$repo_name' added. Create a project with: tonka new <project-name> $repo_name"
 }
 
